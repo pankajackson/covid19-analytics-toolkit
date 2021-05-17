@@ -21,12 +21,14 @@ es_hosts=[
 
 # Get ES
 def get_es_con():
+    print('Getting ES Connection...')
     es = Elasticsearch(hosts=es_hosts)
     return es
 
 # Download Data
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
 def download_data(url=source_data_url):
+    print('Downloading Data...')
     if not os.path.exists(os.path.abspath(source_data_dir)):
         os.makedirs(os.path.abspath(source_data_dir))
     abs_data_path = os.path.join(os.path.abspath(source_data_dir), datetime.now().strftime("%Y%m%d__%H%M") + '_' + source_data_file)
@@ -38,12 +40,14 @@ def download_data(url=source_data_url):
 
 # Load DataSet
 def get_dataframe(path=download_data()):
+    print('Reading Data...')
     df = pd.read_csv(path)
     df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
     return df
 
 # Save data in CSV
 def save_cleaned_df(df):
+    print('Saving Cleaned Data...')
     if not os.path.exists(os.path.abspath(dest_clean_data_dir)):
         os.makedirs(os.path.abspath(dest_clean_data_dir))
     abs_cleaned_data_path = os.path.join(os.path.abspath(dest_clean_data_dir), datetime.now().strftime("%Y%m%d__%H%M") + '_cleaned_' + source_data_file)
@@ -51,11 +55,11 @@ def save_cleaned_df(df):
 
 # Fill missing continent
 def get_cleaned_df(df=get_dataframe()):
-    iso_codes = df['iso_code'].unique()
+    print('Cleaning Data...')
 
     # Fill missing continent
+    iso_codes = df['iso_code'].unique()
     for iso_c in iso_codes:
-
         # Drop Data having iso_code starting with OWID_
         if str(iso_c).startswith('OWID_'):
             index = df[df['iso_code']==iso_c].index
@@ -88,12 +92,14 @@ def get_cleaned_df(df=get_dataframe()):
 
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
 def push_data_to_es(index, id, doc_type, body):
+    print('Pushing Data to ES...')
     es = get_es_con()
     res = es.index(index=index, id=id, doc_type=doc_type, body=body)
     print(res['result'])
 
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
 def push_bulk_data_to_es(actions):
+    print('Pushing bulk Data to ES...')
     es = get_es_con()
     if actions:
         res = helpers.bulk(es, actions=actions)
@@ -101,6 +107,7 @@ def push_bulk_data_to_es(actions):
     return None
 
 def get_last_updated_datetime(es=get_es_con(), iso_c=None):
+    print('Fetching last updated timestamp...')
     if iso_c:
         latest_data_query_body = {"sort": [{"@timestamp": {"order": "desc"}}], "query": {"match": {"iso_code": iso_c}}}
         latest_data = es.search(index="covid-*", body=latest_data_query_body, size=1)
@@ -110,6 +117,7 @@ def get_last_updated_datetime(es=get_es_con(), iso_c=None):
     return None
 
 def process_es_data(df=get_cleaned_df()):
+    print('Processing Data...')
     df['date'] = df['date'].dt.to_pydatetime()
     df['date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
     df_dict = df.to_dict(orient="records")
@@ -121,13 +129,15 @@ def process_es_data(df=get_cleaned_df()):
         push_data_to_es(index=index, id=_id, doc_type='_doc', body=doc)
 
 def process_bulk_es_data(df=get_cleaned_df()):
+    print('Processing bulk Data...')
     for iso_c, data in df.groupby('iso_code'):
         print('Processing %s' % iso_c)
         actions = []
         data['date'] = data['date'].dt.to_pydatetime()
         data['date'] = data['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
         last_updated_datetime = get_last_updated_datetime(iso_c=iso_c)
-        data=data[data['date']>=last_updated_datetime]
+        if last_updated_datetime:
+            data=data[data['date']>=last_updated_datetime]
         df_dict = data.to_dict(orient="records")
         for doc in df_dict:
             doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')

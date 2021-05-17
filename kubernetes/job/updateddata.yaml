@@ -1,0 +1,20 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: covid-19-data-puller
+spec:
+  schedule: "0 * * * *"
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: covid-19-data-puller
+            image: "pankajackson/covid19esdatapuller:01"
+            imagePullPolicy: Always
+            env:
+            - name: "SOURCE_DATA_URL"
+              value: "https://covid.ourworldindata.org/data/owid-covid-data.csv"
+            - name: "ES_URL"
+              value: "elasticsearch:9200"
+          restartPolicy: OnFailure
