@@ -128,31 +128,35 @@ def process_es_data(df=get_cleaned_df()):
         print(_id)
         push_data_to_es(index=index, id=_id, doc_type='_doc', body=doc)
 
+@retry(stop_max_attempt_number=3, wait_fixed=10000)
 def process_bulk_es_data(df=get_cleaned_df()):
-    print('Processing bulk Data...')
-    for iso_c, data in df.groupby('iso_code'):
-        print('Processing %s' % iso_c)
-        actions = []
-        data['date'] = data['date'].dt.to_pydatetime()
-        data['date'] = data['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-        last_updated_datetime = get_last_updated_datetime(iso_c=iso_c)
-        if last_updated_datetime:
-            data=data[data['date']>=last_updated_datetime]
-        df_dict = data.to_dict(orient="records")
-        for doc in df_dict:
-            doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
-            _id = doc['continent'] + doc['iso_code'] + str(int(doc['@timestamp'].timestamp()))
-            index = ('covid-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
-            action = {
-                "_index": index,
-                "_type": "_doc",
-                "_id": _id,
-                "_source": doc
-            }
-            actions.append(action)
-            print(doc['date'])
-        res = push_bulk_data_to_es(actions=actions)
-        print(res)
+    try:
+        print('Processing bulk Data...')
+        for iso_c, data in df.groupby('iso_code'):
+            print('Processing %s' % iso_c)
+            actions = []
+            data['date'] = data['date'].dt.to_pydatetime()
+            data['date'] = data['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+            last_updated_datetime = get_last_updated_datetime(iso_c=iso_c)
+            if last_updated_datetime:
+                data=data[data['date']>=last_updated_datetime]
+            df_dict = data.to_dict(orient="records")
+            for doc in df_dict:
+                doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
+                _id = doc['continent'] + doc['iso_code'] + str(int(doc['@timestamp'].timestamp()))
+                index = ('covid-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
+                action = {
+                    "_index": index,
+                    "_type": "_doc",
+                    "_id": _id,
+                    "_source": doc
+                }
+                actions.append(action)
+                print(doc['date'])
+            res = push_bulk_data_to_es(actions=actions)
+            print(res)
+    except Exception as e:
+        print(str(e))
 
 process_bulk_es_data()
 
