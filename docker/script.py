@@ -141,7 +141,7 @@ def process_bulk_es_data(df=get_cleaned_df()):
             df_dict = data.to_dict(orient="records")
             for doc in df_dict:
                 doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
-                _id = doc['continent'] + doc['iso_code'] + str(int(doc['@timestamp'].timestamp()))
+                _id = doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp']).replace(' ', '_').replace(':','-')
                 index = ('covid-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
                 action = {
                     "_index": index,
