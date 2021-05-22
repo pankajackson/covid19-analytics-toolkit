@@ -10,11 +10,13 @@ spec:
         spec:
           containers:
           - name: covid-19-data-puller
-            image: "pankajackson/covid19esdatapuller:01"
+            image: "pankajackson/covid19esdatapuller:02"
             imagePullPolicy: Always
             env:
-            - name: "SOURCE_DATA_URL"
+            - name: "OWID_SOURCE_DATA_URL"
               value: "https://covid.ourworldindata.org/data/owid-covid-data.csv"
             - name: "ES_URL"
               value: "elasticsearch:9200"
+            - name: "ES_INDEX"
+              value: "test"
           restartPolicy: OnFailure

@@ -6,8 +6,9 @@ from urllib.parse import urlparse
 import requests
 import os
 
-es_index = 'covid'
-owid_data_source_url = os.getenv('SOURCE_DATA_URL', "https://covid.ourworldindata.org/data/owid-covid-data.csv")
+es_index = os.getenv('ES_INDEX', "covid")
+print('ES_INDEX: %s' % es_index)
+owid_data_source_url = os.getenv('OWID_SOURCE_DATA_URL', "https://covid.ourworldindata.org/data/owid-covid-data.csv")
 source_data_dir = os.getenv('SOURCE_DATA_DIR', '/data/raw/')
 dest_clean_data_dir = os.getenv('DEST_CLEAN_DATA_DIR', '/data/cleaned/')
 es_hosts=os.getenv('ES_URL', [
