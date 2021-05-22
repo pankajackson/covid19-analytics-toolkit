@@ -2,13 +2,13 @@ import pandas as pd
 from elasticsearch import Elasticsearch, helpers
 from datetime import datetime
 from retrying import retry
+from urllib.parse import urlparse
 import requests
 import os
 
-
-source_data_url = os.getenv('SOURCE_DATA_URL', "https://covid.ourworldindata.org/data/owid-covid-data.csv")
+es_index = 'covid'
+owid_data_source_url = os.getenv('SOURCE_DATA_URL', "https://covid.ourworldindata.org/data/owid-covid-data.csv")
 source_data_dir = os.getenv('SOURCE_DATA_DIR', '/data/raw/')
-source_data_file = os.getenv('SOURCE_DATA_FILE', 'owid-covid-data.csv')
 dest_clean_data_dir = os.getenv('DEST_CLEAN_DATA_DIR', '/data/cleaned/')
 es_hosts=os.getenv('ES_URL', [
             'http://kube.jackson.com:30337',
@@ -19,14 +19,14 @@ es_hosts=os.getenv('ES_URL', [
 
 # Get ES
 def get_es_con():
-    print('Getting ES Connection...')
     es = Elasticsearch(hosts=es_hosts)
     return es
 
 # Download Data
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
-def download_data(url=source_data_url):
+def download_data(url):
     print('Downloading Data...')
+    source_data_file = os.path.basename(urlparse(url).path)
     if not os.path.exists(os.path.abspath(source_data_dir)):
         os.makedirs(os.path.abspath(source_data_dir))
     abs_data_path = os.path.join(os.path.abspath(source_data_dir), datetime.now().strftime("%Y%m%d__%H%M") + '_' + source_data_file)
@@ -37,25 +37,25 @@ def download_data(url=source_data_url):
     return abs_data_path
 
 # Load DataSet
-def get_dataframe(path=download_data()):
+def get_dataframe(path):
     print('Reading Data...')
     df = pd.read_csv(path)
-    df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
     return df
 
 # Save data in CSV
-def save_cleaned_df(df):
+def save_cleaned_df(df, filename):
     print('Saving Cleaned Data...')
     if not os.path.exists(os.path.abspath(dest_clean_data_dir)):
         os.makedirs(os.path.abspath(dest_clean_data_dir))
-    abs_cleaned_data_path = os.path.join(os.path.abspath(dest_clean_data_dir), datetime.now().strftime("%Y%m%d__%H%M") + '_cleaned_' + source_data_file)
+    abs_cleaned_data_path = os.path.join(os.path.abspath(dest_clean_data_dir), datetime.now().strftime("%Y%m%d__%H%M") + '_cleaned_' + filename)
     df.to_csv(abs_cleaned_data_path)
 
 # Fill missing continent
-def get_cleaned_df(df=get_dataframe()):
+def get_cleaned_owid_df(df):
     print('Cleaning Data...')
 
     # Fill missing continent
+    df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
     iso_codes = df['iso_code'].unique()
     for iso_c in iso_codes:
         # Drop Data having iso_code starting with OWID_
@@ -85,19 +85,10 @@ def get_cleaned_df(df=get_dataframe()):
     # Fill NA using FFill Value or Zero Value
     df_filled_zero = numeric_data.fillna(0)
     df.update(df_filled_zero)
-    save_cleaned_df(df)
     return df
 
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
-def push_data_to_es(index, id, doc_type, body):
-    print('Pushing Data to ES...')
-    es = get_es_con()
-    res = es.index(index=index, id=id, doc_type=doc_type, body=body)
-    print(res['result'])
-
-@retry(stop_max_attempt_number=3, wait_fixed=10000)
 def push_bulk_data_to_es(actions):
-    print('Pushing bulk Data to ES...')
     es = get_es_con()
     if actions:
         res = helpers.bulk(es, actions=actions)
@@ -105,33 +96,19 @@ def push_bulk_data_to_es(actions):
     return None
 
 def get_last_updated_datetime(es=get_es_con(), iso_c=None):
-    print('Fetching last updated timestamp...')
     if iso_c:
         latest_data_query_body = {"sort": [{"@timestamp": {"order": "desc"}}], "query": {"match": {"iso_code": iso_c}}}
-        latest_data = es.search(index="covid-*", body=latest_data_query_body, size=1)
+        latest_data = es.search(index=es_index + '-*', body=latest_data_query_body, size=1)
         if len(latest_data['hits']['hits']) > 0:
             latest_date = latest_data['hits']['hits'][0]['_source']['date']
             return latest_date
     return None
 
-def process_es_data(df=get_cleaned_df()):
-    print('Processing Data...')
-    df['date'] = df['date'].dt.to_pydatetime()
-    df['date'] = df['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-    df_dict = df.to_dict(orient="records")
-    for doc in df_dict:
-        doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
-        _id = doc['continent'] + doc['iso_code'] + str(int(doc['@timestamp'].timestamp()))
-        index = ('covid-' + '-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
-        print(_id)
-        push_data_to_es(index=index, id=_id, doc_type='_doc', body=doc)
-
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
-def process_bulk_es_data(df=get_cleaned_df()):
+def process_bulk_es_data(df):
     try:
         print('Processing bulk Data...')
         for iso_c, data in df.groupby('iso_code'):
-            print('Processing %s' % iso_c)
             actions = []
             data['date'] = data['date'].dt.to_pydatetime()
             data['date'] = data['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
@@ -142,7 +119,7 @@ def process_bulk_es_data(df=get_cleaned_df()):
             for doc in df_dict:
                 doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
                 _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp'])).replace(' ', '_').replace(':','-')
-                index = ('covid-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
+                index = (es_index + '-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
                 action = {
                     "_index": index,
                     "_type": "_doc",
@@ -150,10 +127,20 @@ def process_bulk_es_data(df=get_cleaned_df()):
                     "_source": doc
                 }
                 actions.append(action)
-            res = push_bulk_data_to_es(actions=actions)
-            print(res)
+            push_bulk_data_to_es(actions=actions)
     except Exception as e:
         print(str(e))
 
-process_bulk_es_data()
+
+if __name__ == '__main__':
+    src_owid_data_file = os.path.basename(urlparse(owid_data_source_url).path)
+    dest_owid_data_file = datetime.now().strftime("%Y%m%d__%H%M") + '_' + src_owid_data_file
+    owid_df_csv = os.path.join(os.path.abspath(source_data_dir), dest_owid_data_file)
+    if not os.path.exists(owid_df_csv):
+        owid_df_csv = download_data(owid_data_source_url)
+    df = get_dataframe(owid_df_csv)
+    cleaned_df = get_cleaned_owid_df(df)
+    save_cleaned_df(cleaned_df, dest_owid_data_file)
+    process_bulk_es_data(cleaned_df)
+
 
