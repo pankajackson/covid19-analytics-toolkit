@@ -1,0 +1,38 @@
+{
+    "order": 1,
+    "index_patterns": [
+        "covid-*"
+    ],
+    "settings": {
+        "index": {
+            "number_of_shards": "3",
+            "mapping": {
+                "total_fields": {
+                    "limit": "10000"
+                }
+            },
+            "refresh_interval": "5s"
+        }
+    },
+    "mappings": {
+        "doc": {
+            "_meta": {
+                "version": "6.0.0-rc2"
+            },
+            "properties": {
+                "state": {
+                    "properties": {
+                        "location": {
+                            "type": "geo_point"
+                        }
+                    }
+                },
+                "metadata": {
+                    "type": "object",
+                    "dynamic": false
+                }
+            }
+        }
+    },
+    "aliases": {}
+}

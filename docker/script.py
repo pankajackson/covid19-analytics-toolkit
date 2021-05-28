@@ -8,6 +8,7 @@ from urllib.parse import urlparse
 import requests
 import os
 import pycountry
+import sys
 
 es_index = os.getenv('ES_INDEX', "test")
 print('ES_INDEX: %s' % es_index)
@@ -30,7 +31,7 @@ def get_es_con():
     return es
 
 def get_paths(url):
-    timestamp = datetime.now().strftime("%Y%m%d__%H%M")
+    timestamp = datetime.now().strftime("%Y%m%d__%H")
     file_name = os.path.basename(urlparse(url).path)
     if not os.path.exists(os.path.abspath(source_data_dir)):
         os.makedirs(os.path.abspath(source_data_dir))
@@ -53,15 +54,23 @@ def get_paths(url):
 # Download Data
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
 def download_data(url):
-    print('Downloading Data %s...' % url)
-    paths = get_paths(url)
-    if not os.path.exists(os.path.abspath(paths['raw_file_dir_name'])):
-        os.makedirs(os.path.abspath(paths['raw_file_dir_name']))
-    url_content = requests.get(url).content
-    file = open(paths['raw_file_path'], 'wb')
-    file.write(url_content)
-    file.close()
-    return paths['raw_file_path']
+    try:
+        print('Downloading Data %s...' % url)
+        paths = get_paths(url)
+        if not os.path.exists(os.path.abspath(paths['raw_file_dir_name'])):
+            os.makedirs(os.path.abspath(paths['raw_file_dir_name']))
+        resp = requests.get(url)
+        if resp.status_code == 200:
+            file = open(paths['raw_file_path'], 'wb')
+            file.write(resp.content)
+            file.close()
+            return paths['raw_file_path']
+        else:
+            print('Error Downloading data from %s\nError Code %s' % (url, resp.status_code))
+            return None
+    except Exception as e:
+        print(str(e))
+        return None
 
 # Load DataSet
 def get_dataframe(path):
@@ -134,6 +143,9 @@ def get_cleaned_csse_data_df(df):
         df.rename(columns={'Country/Region': 'Country_Region'}, inplace=True)
     if 'Last Update' in df and not 'Last_Update' in df:
         df.rename(columns={'Last Update': 'Last_Update'}, inplace=True)
+    df.drop(columns='Last_Update', inplace=True)
+
+    # df['Last_Update'] = df['Last_Update'].astype(str)
     if not 'Combined_Key' in df:
         if 'Province_State' in df and 'Country_Region' in df:
             df['Combined_Key'] = df['Province_State'] + ', ' + df['Country_Region']
@@ -215,6 +227,8 @@ def get_csse_df(date=datetime.now()):
             csse_df_csv = download_data(csse_data_source_url)
         else:
             csse_df_csv = paths['raw_file_path']
+        if not csse_df_csv:
+            return pd.DataFrame()
         csse_df = get_dataframe(csse_df_csv)
         cleaned_csse_df = get_cleaned_csse_data_df(csse_df)
         save_cleaned_df(cleaned_csse_df, paths['cleaned_file_path'])
@@ -282,24 +296,41 @@ def process_bulk_es_data(df):
     print('Processing bulk Data...')
     df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
     for iso_c, data in df.groupby('iso_code'):
-        try:
+        # try:
+        data['date'] = data['date'].dt.to_pydatetime()
+        data['date'] = data['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        last_updated_datetime = get_last_updated_datetime(iso_c=iso_c)
+        if last_updated_datetime:
+            data=data[data['date']>=last_updated_datetime]
+        df_dict = data.to_dict(orient="records")
+        for doc in df_dict:
+            doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
+            # _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp'])).replace(' ', '_').replace(':','-')
+            index = (es_index + '-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
             actions = []
-            data['date'] = data['date'].dt.to_pydatetime()
-            data['date'] = data['date'].dt.strftime('%Y-%m-%d %H:%M:%S')
-            last_updated_datetime = get_last_updated_datetime(iso_c=iso_c)
-            if last_updated_datetime:
-                data=data[data['date']>=last_updated_datetime]
-                print(last_updated_datetime)
-            df_dict = data.to_dict(orient="records")
-            for doc in df_dict:
-                doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
-                _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp'])).replace(' ', '_').replace(':','-')
-                index = (es_index + '-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
-                csse_df = get_csse_df(doc['@timestamp'])
+            csse_df = get_csse_df(doc['@timestamp'])
+            if not csse_df.empty:
                 csse_df_cont = csse_df[csse_df['iso_code'] == str(doc['iso_code']).upper()]
-                if csse_df_cont.shape[0] == 0:
+                if csse_df_cont.shape[0] != 0:
+                    for csse_doc in csse_df_cont.to_dict(orient="records"):
+                        _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp']) + '_' +  str(csse_doc['Lat']) + '_' +  str(csse_doc['Long_']) + '_' +  str(csse_doc['Combined_Key'])).replace(' ', '_').replace(':','-').replace('.', '_')
+                        csse_doc['location'] = {
+                            'lat': csse_doc['Lat'],
+                            'lon': csse_doc['Long_'],
+                        }
+                        doc['state'] = csse_doc
+                        action = {
+                            "_index": index,
+                            "_type": "_doc",
+                            "_id": _id,
+                            "_source": doc
+                        }
+                        actions.append(action)
+                else:
                     print('No data for location: ', doc['location'])
-                doc['state'] = csse_df_cont.to_dict(orient="records")
+            if len(actions) == 0:
+                _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp'])).replace(' ', '_').replace(':', '-')
+                doc['state'] = {}
                 action = {
                     "_index": index,
                     "_type": "_doc",
@@ -307,9 +338,10 @@ def process_bulk_es_data(df):
                     "_source": doc
                 }
                 actions.append(action)
+
             push_bulk_data_to_es(actions=actions)
-        except Exception as e:
-            print(str(e))
+        # except Exception as e:
+        #     print(str(e))
 
 
 if __name__ == '__main__':
@@ -320,6 +352,8 @@ if __name__ == '__main__':
             owid_df_csv = download_data(owid_data_source_url)
         else:
             owid_df_csv = paths['raw_file_path']
+        if not owid_df_csv:
+            sys.exit()
         owid_df = get_dataframe(owid_df_csv)
         cleaned_owid_df = get_cleaned_owid_df(owid_df)
         save_cleaned_df(cleaned_owid_df, paths['cleaned_file_path'])
