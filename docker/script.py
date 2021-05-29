@@ -10,7 +10,7 @@ import os
 import pycountry
 import sys
 
-es_index = os.getenv('ES_INDEX', "test")
+es_index = os.getenv('ES_INDEX', "covid")
 print('ES_INDEX: %s' % es_index)
 owid_data_source_url = os.getenv('OWID_SOURCE_DATA_URL', "https://covid.ourworldindata.org/data/owid-covid-data.csv")
 csse_data_source_baseurl = os.getenv('CSSEGISANDDATA_DATA_SOURCE_BASEURL', "https://raw.githubusercontent.com/CSSEGISandData/COVID-19/master/csse_covid_19_data/csse_covid_19_daily_reports")
@@ -78,39 +78,94 @@ def get_dataframe(path):
     df = pd.read_csv(path)
     return df
 
-def get_iso_code(data):
-    print('Fetching ISO_CODE for %s' % str(data['country']))
+
+def get_lat_long(combined=None, country=None, state=None, iso_code=None):
+    if not combined and not iso_code:
+        combined = str(state) + ',' + str(country)
+    if combined and combined in geo_points.keys():
+        return geo_points[combined]
+    if iso_code and iso_code in geo_points.keys():
+        return geo_points[iso_code]
+    if iso_code:
+        print('Fetching LAT LONG for %s' % str(iso_code))
+    else:
+        print('Fetching LAT LONG for %s' % str(combined))
+    loc = None
     geolocator = Nominatim(user_agent="python")
-    loc = geolocator.reverse("%s, %s" % (data['latitude'], data['longitude']))
+    if country and state:
+        loc = geolocator.geocode(state + ',' + country)
+    if not loc and combined:
+        loc = geolocator.geocode(combined)
+    if not loc and state:
+        loc = geolocator.geocode(state)
+    if not loc and country:
+        loc = geolocator.geocode(country)
+    if not loc and iso_code:
+        try:
+            c = None
+            if '-' in iso_code:
+                c = pycountry.subdivisions.get(code=iso_code)
+            elif len(iso_code) == 2:
+                c = pycountry.countries.get(alpha_2=iso_code)
+            elif len(iso_code) == 3:
+                c = pycountry.countries.get(alpha_3=iso_code)
+            if c:
+                loc = geolocator.geocode(c.name)
+        except:
+            pass
     if not loc:
-        print('address not found from loc and lan')
-        loc = geolocator.geocode(str(data['state']) + ',' + str(data['country']))
-    if not loc:
-        loc = geolocator.geocode(str(data['combined']))
-    if not loc:
-        loc = geolocator.geocode(str(data['country']))
-    if not loc:
-        loc = geolocator.geocode(str(data['state']))
+        print('Location Not Found for %s, %s' % (state, country))
+        return None
+    else:
+        # Update Local geolocation database
+        if iso_code:
+            geo_points[iso_code] = {
+                'latitude': loc.latitude,
+                'longitude': loc.longitude
+            }
+            return geo_points[iso_code]
+        else:
+            geo_points[combined] = {
+                'latitude': loc.latitude,
+                'longitude': loc.longitude
+            }
+            return geo_points[combined]
+
+
+def get_iso_code(country, state=None, combined=None):
+    if country in iso_codes.keys():
+        return iso_codes[country]
+    print('Fetching ISO_CODE for %s' % str(country))
+    geolocator = Nominatim(user_agent="python")
+    loc = None
+    if country and state:
+        loc = geolocator.geocode(str(state) + ',' + str(country))
+    if not loc and combined:
+        loc = geolocator.geocode(str(combined))
+    if not loc and country:
+        loc = geolocator.geocode(str(country))
+    if not loc and state:
+        loc = geolocator.geocode(str(state))
     try:
         location = pycountry.countries.get(alpha_2=str(loc.raw['address']['country_code']))
         iso_code = {
             'alpha_3': str(location.alpha_3).upper(),
             'alpha_2': str(location.alpha_2).upper(),
         }
-        iso_codes[data['country']] = iso_code
+        iso_codes[country] = iso_code
         return iso_code
     except:
         try:
-            location = pycountry.countries.search_fuzzy(str(data['country']))
+            location = pycountry.countries.search_fuzzy(str(country))
         except:
             try:
                 location = pycountry.countries.search_fuzzy(str(loc.address).split(',')[-1].strip())
             except:
                 try:
-                    location = pycountry.countries.search_fuzzy(str(data['combined']))
+                    location = pycountry.countries.search_fuzzy(str(combined))
                 except:
                     try:
-                        location = pycountry.countries.search_fuzzy(str(data['state']))
+                        location = pycountry.countries.search_fuzzy(str(state))
                     except:
                         res = {'alpha_3': '', 'alpha_2': ''}
                         return res
@@ -118,7 +173,7 @@ def get_iso_code(data):
         'alpha_3': str(location[0].alpha_3).upper(),
         'alpha_2': str(location[0].alpha_2).upper(),
     }
-    iso_codes[data['country']] = iso_code
+    iso_codes[country] = iso_code
     return iso_code
 
 # Save data in CSV
@@ -132,7 +187,6 @@ def save_cleaned_df(df, file_path):
 def get_cleaned_csse_data_df(df):
     print('Cleaning CSSE Data...')
 
-    # Filling missing latitude and longitude
     if 'Lat' not in df:
         df['Lat'] = np.nan
     if 'Long_' not in df:
@@ -144,8 +198,8 @@ def get_cleaned_csse_data_df(df):
     if 'Last Update' in df and not 'Last_Update' in df:
         df.rename(columns={'Last Update': 'Last_Update'}, inplace=True)
     df.drop(columns='Last_Update', inplace=True)
-
-    # df['Last_Update'] = df['Last_Update'].astype(str)
+    if 'Case_Fatality_Ratio' in df:
+        df.drop(columns='Case_Fatality_Ratio', inplace=True)
     if not 'Combined_Key' in df:
         if 'Province_State' in df and 'Country_Region' in df:
             df['Combined_Key'] = df['Province_State'] + ', ' + df['Country_Region']
@@ -153,56 +207,33 @@ def get_cleaned_csse_data_df(df):
             df['Combined_Key'] = df['Country_Region']
         if 'Province_State' in df:
             df['Combined_Key'] = df['Province_State']
-    geolocator = Nominatim(user_agent="python")
-    for i, row in df[df['Lat'].isnull()].iterrows():
-        try:
-            try:
-                df.at[i, 'Lat'] = geo_points[row['Combined_Key']]['latitude']
-                df.at[i, 'Long_'] = geo_points[row['Combined_Key']]['longitude']
-            except:
-                country = str(row['Country_Region'])
-                city = str(row['Province_State'])
-                loc = geolocator.geocode(city + ',' + country)
-                if not loc:
-                    loc = geolocator.geocode(row['Combined_Key'])
-                if not loc:
-                    loc = geolocator.geocode(row['Province_State'])
-                if not loc:
-                    loc = geolocator.geocode(row['Country_Region'])
-                if not loc:
-                    print('Location Not Found for %s, %s' % (row['Province_State'], row['Country_Region']))
-
-                else:
-                    df.at[i, 'Lat'] = loc.latitude
-                    df.at[i, 'Long_'] = loc.longitude
-                    # Update Local geolocation database
-                    geo_points[row['Combined_Key']] = {
-                        'latitude': loc.latitude,
-                        'longitude': loc.longitude
-                    }
-        except Exception as e:
-            print(str(e))
-
 
     # Filling iso_code
     df['iso_code'] = np.nan
     for i, row in df.groupby('Country_Region'):
-        try:
-            df.loc[df.Country_Region == i, 'iso_code'] = iso_codes[i]['alpha_3']
-        except:
-            location = row.iloc[0]
-            req = {
-                'country': location['Country_Region'],
-                'state': location['Province_State'],
-                'combined': location['Combined_Key'],
-                'latitude': location['Lat'],
-                'longitude': location['Long_'],
-            }
-            iso_code = get_iso_code(req)
+        for index in range(0, row.shape[0]-1):
+            location = row.iloc[index]
+            country = location['Country_Region']
+            state = location['Province_State']
+            combined = location['Combined_Key']
+            iso_code = get_iso_code(country=country, state=state, combined=combined)
             if iso_code['alpha_3']:
                 df.loc[df.Country_Region == i, 'iso_code'] = iso_code['alpha_3']
-            else:
-                print('ISO code Not Found for %s' % i)
+                break
+
+
+    # Filling missing latitude and longitude
+    for i, row in df[df['Lat'].isnull()].groupby('Combined_Key'):
+        for index in range(0, row.shape[0]-1):
+            location = row.iloc[index]
+            country = location['Country_Region']
+            state = location['Province_State']
+            combined = location['Combined_Key']
+            geo_location = get_lat_long(country=country, state=state, combined=combined)
+            if geo_location:
+                df.loc[df.Combined_Key == i, 'Lat'] = geo_location['latitude']
+                df.loc[df.Combined_Key == i, 'Long_'] = geo_location['longitude']
+                break
 
 
     # Fill Missing Numerical features
@@ -276,6 +307,7 @@ def get_cleaned_owid_df(df):
 
 @retry(stop_max_attempt_number=3, wait_fixed=10000)
 def push_bulk_data_to_es(actions):
+    print('Pushing %s data to Elasticsearch...' % len(actions))
     es = get_es_con()
     if actions:
         res = helpers.bulk(es, actions=actions)
@@ -295,6 +327,7 @@ def get_last_updated_datetime(es=get_es_con(), iso_c=None):
 def process_bulk_es_data(df):
     print('Processing bulk Data...')
     df['date'] = pd.to_datetime(df['date'], format='%Y-%m-%d')
+    actions = []
     for iso_c, data in df.groupby('iso_code'):
         # try:
         data['date'] = data['date'].dt.to_pydatetime()
@@ -305,16 +338,20 @@ def process_bulk_es_data(df):
         df_dict = data.to_dict(orient="records")
         for doc in df_dict:
             doc['@timestamp'] = datetime.strptime(doc['date'], '%Y-%m-%d %H:%M:%S')
-            # _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp'])).replace(' ', '_').replace(':','-')
+            iso_geolocation = get_lat_long(iso_code=doc['iso_code'])
+            if iso_geolocation:
+                doc['geo_point'] = {
+                    'lat': iso_geolocation['latitude'],
+                    'lon': iso_geolocation['longitude'],
+                }
             index = (es_index + '-' + str(doc['@timestamp'].year) + '-' + str(doc['@timestamp'].month)).lower()
-            actions = []
             csse_df = get_csse_df(doc['@timestamp'])
             if not csse_df.empty:
                 csse_df_cont = csse_df[csse_df['iso_code'] == str(doc['iso_code']).upper()]
                 if csse_df_cont.shape[0] != 0:
                     for csse_doc in csse_df_cont.to_dict(orient="records"):
                         _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp']) + '_' +  str(csse_doc['Lat']) + '_' +  str(csse_doc['Long_']) + '_' +  str(csse_doc['Combined_Key'])).replace(' ', '_').replace(':','-').replace('.', '_')
-                        csse_doc['location'] = {
+                        csse_doc['geo_point'] = {
                             'lat': csse_doc['Lat'],
                             'lon': csse_doc['Long_'],
                         }
@@ -327,21 +364,23 @@ def process_bulk_es_data(df):
                         }
                         actions.append(action)
                 else:
-                    print('No data for location: ', doc['location'])
-            if len(actions) == 0:
-                _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp'])).replace(' ', '_').replace(':', '-')
-                doc['state'] = {}
-                action = {
-                    "_index": index,
-                    "_type": "_doc",
-                    "_id": _id,
-                    "_source": doc
-                }
-                actions.append(action)
+                    print('No data for location: ', doc['location'], doc['@timestamp'].strftime("%Y-%m-%d"))
+                    _id = (doc['continent'] + doc['iso_code'] + '_' + str(doc['@timestamp'])).replace(' ', '_').replace(':', '-')
+                    doc['state'] = {}
+                    action = {
+                        "_index": index,
+                        "_type": "_doc",
+                        "_id": _id,
+                        "_source": doc
+                    }
+                    actions.append(action)
+                if len(actions) >= 50:
+                    push_bulk_data_to_es(actions=actions)
+                    actions.clear()
 
-            push_bulk_data_to_es(actions=actions)
-        # except Exception as e:
-        #     print(str(e))
+    if len(actions) > 0:
+        push_bulk_data_to_es(actions=actions)
+        actions.clear()
 
 
 if __name__ == '__main__':

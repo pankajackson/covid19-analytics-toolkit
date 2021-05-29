@@ -10,7 +10,7 @@ spec:
         spec:
           containers:
           - name: covid-19-data-puller
-            image: "pankajackson/covid19esdatapuller:02"
+            image: "pankajackson/covid19esdatapuller:03"
             imagePullPolicy: Always
             env:
             - name: "OWID_SOURCE_DATA_URL"

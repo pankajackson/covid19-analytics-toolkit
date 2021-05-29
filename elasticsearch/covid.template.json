@@ -1,35 +1,33 @@
 {
-    "order": 1,
+    "order": 0,
     "index_patterns": [
         "covid-*"
     ],
     "settings": {
         "index": {
-            "number_of_shards": "3",
-            "mapping": {
-                "total_fields": {
-                    "limit": "10000"
-                }
-            },
-            "refresh_interval": "5s"
+            "number_of_shards": "1",
+            "auto_expand_replicas": "0-1",
+            "codec": "best_compression"
         }
     },
     "mappings": {
         "doc": {
             "_meta": {
-                "version": "6.0.0-rc2"
+                "version": "6.8.2"
             },
             "properties": {
                 "state": {
                     "properties": {
-                        "location": {
+                        "geo_point": {
                             "type": "geo_point"
+                        },
+                        "type": {
+                            "type": "keyword"
                         }
                     }
                 },
-                "metadata": {
-                    "type": "object",
-                    "dynamic": false
+                "geo_point": {
+                    "type": "geo_point"
                 }
             }
         }
