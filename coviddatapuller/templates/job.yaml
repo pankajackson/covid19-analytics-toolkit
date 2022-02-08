@@ -1,0 +1,58 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ include "coviddatapuller.name" . }}
+  labels:
+    {{- include "coviddatapuller.labels" . | nindent 4 }}
+spec:
+  schedule: {{ .Values.schedule }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          containers:
+          - name: {{ include "coviddatapuller.name" . }}
+            image: {{ .Values.image.repository }}:{{ .Values.image.tag | default "latest" }}
+            imagePullPolicy: {{ .Values.image.pullPolicy }}
+            env:
+            - name: ES_HOSTS
+              value: {{ .Values.elasticsearch.hosts }}
+            - name: ES_USER
+              value: {{ .Values.elasticsearch.user }}
+            - name: ES_CA
+              value: {{ .Values.elasticsearch.ca_path | default "/app/cert/ca.crt"  }}
+            - name: "ES_SCHEME"
+              value: {{ .Values.elasticsearch.scheme | default "https" }}
+            {{- if .Values.elasticsearch.verify_certs }}
+            - name: "ES_VERIFY_CERT"
+              value: "True"
+            {{- else }}
+            - name: "ES_VERIFY_CERT"
+              value: "False"
+            {{- end }}
+            - name: ES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.elasticsearch.secrets_ref.password }}
+                  key: elastic
+            command: ["/bin/sh","-c"]
+            args: ["pip install -r /app/requirements.txt; python /app/data_puller.py"]
+            volumeMounts:
+              - name: python-data
+                mountPath: /app
+              - name: cert-ca
+                mountPath: /app/cert
+                readOnly: true
+          volumes:
+          - name: python-data
+            configMap:
+              name: {{ include "coviddatapuller.name" . }}
+              items:
+                - key: requirements.txt
+                  path: requirements.txt
+                - key: data_puller.py
+                  path: data_puller.py
+          - name: cert-ca
+            secret:
+              secretName: {{ .Values.elasticsearch.secrets_ref.ca }}
+          restartPolicy: Never

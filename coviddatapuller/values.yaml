@@ -1,0 +1,23 @@
+# Default values for coviddatapuller.
+# This is a YAML-formatted file.
+# Declare variables to be passed into your templates.
+
+
+image:
+  repository: python
+  pullPolicy: IfNotPresent
+  # Overrides the image tag whose default is the chart appVersion.
+  tag: ""
+
+schedule: "0 * * * *"
+
+elasticsearch:
+  version: 7.16.3
+  hosts: "elastic-stack-es-http:9200"
+  user: "elastic"
+  scheme: 'https'
+  verify_certs: true
+  ca_path: '/app/cert/ca.crt'
+  secrets_ref:
+    password: "elastic-stack-es-elastic-user"
+    ca: "elastic-stack-es-http-certs-public"
