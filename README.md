@@ -21,4 +21,4 @@ Then import Index, Map, Visualization, and Dashboard in Kibana
 
 ## Usage
 Browse Kibana and open the *Covid19* dashboard 
-![alt text](https://github.com/pankajackson/covid19dataanalysis/blob/develop/kibana/dashboard.png?raw=true)
+![alt text](https://bitbucket.org/pankajackson/covid19dataanalysis/raw/2a6e7ea0b1f6af967b67ed9e25162b1a48f49058/kibana/dashboard.png)
