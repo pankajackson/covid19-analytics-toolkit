@@ -1,0 +1,35 @@
+{
+    "order": 0,
+    "index_patterns": [
+        "covid-*"
+    ],
+    "settings": {
+        "index": {
+            "number_of_shards": "1",
+            "auto_expand_replicas": "0-1",
+            "codec": "best_compression"
+        }
+    },
+    "mappings": {
+          "_meta": {
+              "version": "7.16.3"
+          },
+          "properties": {
+              "state": {
+                  "properties": {
+                      "geo_point": {
+                          "type": "geo_point"
+                      },
+                      "type": {
+                          "type": "keyword"
+                      }
+                  }
+              },
+              "geo_point": {
+                  "type": "geo_point"
+              }
+          }
+
+    },
+    "aliases": {}
+}
