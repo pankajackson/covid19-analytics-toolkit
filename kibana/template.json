@@ -12,7 +12,7 @@
     },
     "mappings": {
           "_meta": {
-              "version": "6.8.2"
+              "version": "7.16.3"
           },
           "properties": {
               "state": {
